@@ -20,7 +20,7 @@ class NeuralNetwork:
         hidden_sizes: Sequence[int],
         output_size: int,
         num_layers: int,
-        opt: str,
+        opt: str
     ):
         """Initialize the model. Weights are initialized to small random values
         and biases are initialized to zero. Weights and biases are stored in
@@ -71,7 +71,7 @@ class NeuralNetwork:
         # W is (D, H), X is (N, D), b is (H,)
         # print(f"In Linear: X: {X.shape} W: {W.shape} B {b.shape}")
 
-        out = np.matmul(X, W) + b
+        out = X @ W + b
         return out
 
     def linear_grad(self, W: np.ndarray, X: np.ndarray, de_dz: np.ndarray) -> np.ndarray:
@@ -123,16 +123,18 @@ class NeuralNetwork:
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
         # print(f"In sigmoid, x: {x.shape}")
 
-        pos_mask = (x >= 0)
-        neg_mask = (x < 0)
+        # pos_mask = (x >= 0)
+        # neg_mask = (x < 0)
 
-        denominator = np.zeros_like(x)
-        denominator[pos_mask] = np.exp(-x[pos_mask])
-        denominator[neg_mask] = np.exp(x[neg_mask])
-        numerator = np.ones_like(x)
-        numerator[neg_mask] = denominator[neg_mask]
+        # denominator = np.zeros_like(x)
+        # denominator[pos_mask] = np.exp(-x[pos_mask])
+        # denominator[neg_mask] = np.exp(x[neg_mask])
+        # numerator = np.ones_like(x)
+        # numerator[neg_mask] = denominator[neg_mask]
 
-        return numerator / (1 + denominator)
+        # return numerator / (1 + denominator)
+
+        return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
 
     def sigmoid_grad(self, X: np.ndarray) -> np.ndarray:
         # print(f"In sigmoid grad , X: {X.shape}")
@@ -145,7 +147,7 @@ class NeuralNetwork:
         return np.mean((y - p) ** 2)
 
     def mse_grad(self, y: np.ndarray, p: np.ndarray) -> np.ndarray:
-        return (2 / y.size) * (p - y)
+        return (2 / y.shape[0]) * (p - y)
 
     def mse_sigmoid_grad(self, y: np.ndarray, p: np.ndarray) -> np.ndarray:
         mse_grad = self.mse_grad(y, p)
@@ -161,27 +163,15 @@ class NeuralNetwork:
         Returns:
             Matrix of shape (N, C)
         """
-        self.outputs = {}
-        # TODO: implement me. You'll want to store the output of each layer in
-        # self.outputs as it will be used during back-propagation. You can use
-        # the same keys as self.params. You can use functions like
-        # self.linear, self.relu, and self.mse in here.
-        out = X
-        self.outputs["linear"+str(0)] = out
-
-        for i in range(1, self.num_layers+1):
-            W = self.params["W" + str(i)]
-            b = self.params["b" + str(i)]
-            out = self.linear(W, out, b)
-            self.outputs["linear"+str(i)] = out
-            if i == self.num_layers:
-                out = self.sigmoid(out)
-                self.outputs["act"+str(i)] = out
-            else:
-                out = self.relu(out)
-                self.outputs["act"+str(i)] = out
-
-        return out
+        self.outputs = {"X0": X}
+        for i in range(1, self.num_layers):
+            X = self.relu(self.linear(
+                self.params[f"W{i}"], X, self.params[f"b{i}"]))
+            self.outputs[f"X{i}"] = X
+        X = self.sigmoid(self.linear(
+            self.params[f"W{self.num_layers}"], X, self.params[f"b{self.num_layers}"]))
+        self.outputs[f"X{self.num_layers}"] = X
+        return X
 
     def backward(self, y: np.ndarray) -> float:
         """Perform back-propagation and compute the gradients and losses.
@@ -191,35 +181,17 @@ class NeuralNetwork:
             Total loss for this batch of training samples
         """
         self.gradients = {}
-
-        p = self.outputs["act"+str(self.num_layers)]
-        # print(f"y: {y.shape}, p: {p.shape}")
-
-        loss = self.mse(y, p)
-        # print("Loss: ", loss)
-
-        # is this y right?
-        sigmoid_grad = self.mse_sigmoid_grad(
-            y, self.outputs[f"linear{self.num_layers}"])
-        last_grad = sigmoid_grad
-        # print(f"last grad: {last_grad.shape}")
+        loss = self.mse(y, self.outputs[f"X{self.num_layers}"])
+        de_dz = self.mse_sigmoid_grad(y, self.outputs[f"X{self.num_layers}"])
 
         for i in range(self.num_layers, 0, -1):
-            # print("Layer: ", i)
-            W = self.params["W" + str(i)]
-            b = self.params["b" + str(i)]
-            de_dw, de_db, de_dx = self.linear_grad(
-                W, self.outputs[f"linear{i-1}"], last_grad)
-            self.gradients["W" + str(i)] = de_dw
-            self.gradients["b" + str(i)] = de_db
-            last_grad = de_dx
-            # print(f"last grad: {last_grad.shape}")
+            W, X = self.params[f"W{i}"], self.outputs[f"X{i-1}"]
+            de_dw, de_db, de_dz = self.linear_grad(W, X, de_dz)
+            self.gradients[f"W{i}"] = de_dw
+            self.gradients[f"b{i}"] = de_db
+            if i > 1:
+                de_dz *= self.relu_grad(self.outputs[f"X{i-1}"])
 
-        # TODO: implement me. You'll want to store the gradient of each
-        # parameter in self.gradients as it will be used when updating each
-        # parameter and during numerical gradient checks. You can use the same
-        # keys as self.params. You can add functions like self.linear_grad,
-        # self.relu_grad, and self.softmax_grad if it helps organize your code.
         return loss
 
     def update(
@@ -233,18 +205,14 @@ class NeuralNetwork:
         gradients.
         Parameters:
             lr: Learning rate
-            b1: beta 1 parameter (for Adam)
-            b2: beta 2 parameter (for Adam)
-            eps: epsilon to prevent division by zero (for Adam)
+            b1: beta 1 parameter(for Adam)
+            b2: beta 2 parameter(for Adam)
+            eps: epsilon to prevent division by zero(for Adam)
         """
         if self.opt == 'SGD':
-            for i in range(1, self.num_layers):
-                W = self.params["W" + str(i)]
-                b = self.params["b" + str(i)]
-                W -= self.gradients["W" + str(i)] * lr
-                b -= self.gradients["b" + str(i)] * lr
-                self.params["W" + str(i)] = W
-                self.params["b" + str(i)] = b
+            for i in range(1, self.num_layers+1):
+                self.params[f"W{i}"] -= lr * self.gradients[f"W{i}"]
+                self.params[f"b{i}"] -= lr * self.gradients[f"b{i}"]
         elif self.opt == 'Adam':
             # TODO: (Extra credit) implement Adam optimizer here
             pass
